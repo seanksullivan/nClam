@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Net;
 using Xunit;
 
 namespace nClam.Tests
@@ -29,7 +30,7 @@ namespace nClam.Tests
 
             Assert.Equal(ClamScanResults.VirusDetected, result.Result);
 
-            Assert.Equal(1, result.InfectedFiles.Count);
+            Assert.Single(result.InfectedFiles);
 
             Assert.Equal(@"\\?\C:\test.txt", result.InfectedFiles[0].FileName);
             Assert.Equal(" Eicar-Test-Signature", result.InfectedFiles[0].VirusName);
@@ -44,7 +45,7 @@ namespace nClam.Tests
         }
 
         [Fact]
-        public void before_tests()
+        public void Before_Tests()
         {
             Assert.Equal(
                 "test:test1",
@@ -63,7 +64,7 @@ namespace nClam.Tests
         }
 
         [Fact]
-        public void after_tests()
+        public void After_Tests()
         {
             //current released behavior to have initial space
             //(probably a bug)
@@ -91,6 +92,15 @@ namespace nClam.Tests
 			var client = new ClamClient("localhost");
 			var result = client.SendAndScanFileAsync(new MemoryStream(System.Text.Encoding.Default.GetBytes(Eicartestcase)));
 			Assert.Equal(ClamScanResults.VirusDetected,result.Result.Result);
-		}
+        }
+
+        [Fact(Skip = "Requires ClamAV running on 127.0.0.1:3310 ")]
+        public void TestSendIPAsyncTest()
+        {
+            string Eicartestcase = @"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+            var client = new ClamClient(IPAddress.Parse("127.0.0.1"));
+            var result = client.SendAndScanFileAsync(new MemoryStream(System.Text.Encoding.Default.GetBytes(Eicartestcase)));
+            Assert.Equal(ClamScanResults.VirusDetected, result.Result.Result);
+        }
     }
 }

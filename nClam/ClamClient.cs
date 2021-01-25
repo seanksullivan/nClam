@@ -2,6 +2,7 @@
 {
     using System;
     using System.IO;
+    using System.Net;
     using System.Net.Sockets;
     using System.Text;
     using System.Threading;
@@ -25,20 +26,40 @@
         public string Server { get; set; }
 
         /// <summary>
+        /// IP Address to the ClamAV server
+        /// </summary>
+        public IPAddress ServerIP { get; set; }
+
+        /// <summary>
         /// Port which the ClamAV server is listening on
         /// </summary>
         public int Port { get; set; }
+
+        private ClamClient()
+        {
+            MaxChunkSize = 131072; //128k
+            MaxStreamSize = 26214400; //25mb
+        }
 
         /// <summary>
         /// A class to connect to a ClamAV server and request virus scans
         /// </summary>
         /// <param name="server">Address to the ClamAV server</param>
         /// <param name="port">Port which the ClamAV server is listening on</param>
-        public ClamClient(string server, int port = 3310)
+        public ClamClient(string server, int port = 3310) : this()
         {
-            MaxChunkSize = 131072; //128k
-            MaxStreamSize = 26214400; //25mb
             Server = server;
+            Port = port;
+        }
+
+        /// <summary>
+        /// A class to connect to a ClamAV server via IP and request virus scans
+        /// </summary>
+        /// <param name="serverIP">IP Address to the ClamAV server</param>
+        /// <param name="port">Port which the ClamAV server is listening on</param>
+        public ClamClient(IPAddress serverIP, int port = 3310) : this()
+        {
+            ServerIP = serverIP;
             Port = port;
         }
 
@@ -49,19 +70,18 @@
         /// <param name="cancellationToken">cancellation token used in requests</param>
         /// <param name="additionalCommand">Action to define additional server communications.  Executed after the command is sent and before the response is read.</param>
         /// <returns>The full response from the ClamAV server.</returns>
-        private async Task<string> ExecuteClamCommandAsync(string command, CancellationToken cancellationToken, Func<NetworkStream, CancellationToken, Task> additionalCommand = null)
+        private async Task<string> ExecuteClamCommandAsync(string command, CancellationToken cancellationToken, Func<Stream, CancellationToken, Task> additionalCommand = null)
         {
 #if DEBUG
             var stopWatch = System.Diagnostics.Stopwatch.StartNew();
 #endif
             string result;
 
-            var clam = new TcpClient();
+            var clam = new TcpClient(AddressFamily.InterNetwork);
+
             try
             {
-                await clam.ConnectAsync(Server, Port).ConfigureAwait(false);
-
-                using (var stream = clam.GetStream())
+                using (var stream = await CreateConnection(clam))
                 {
                     var commandText = String.Format("z{0}\0", command);
                     var commandBytes = Encoding.UTF8.GetBytes(commandText);
@@ -111,7 +131,7 @@
 
             while ((size = await sourceStream.ReadAsync(bytes, 0, size, cancellationToken).ConfigureAwait(false)) > 0)
             {
-                if (sourceStream.Position > MaxStreamSize)
+                if (sourceStream.CanSeek && sourceStream.Position > MaxStreamSize)
                 {
                     throw new MaxStreamSizeExceededException(MaxStreamSize);
                 }
@@ -123,6 +143,13 @@
 
             var newMessage = BitConverter.GetBytes(0);
             await clamStream.WriteAsync(newMessage, 0, newMessage.Length, cancellationToken).ConfigureAwait(false);
+        }
+
+        protected async virtual Task<Stream> CreateConnection(TcpClient clam)
+        {
+            await (ServerIP == null ? clam.ConnectAsync(Server, Port) : clam.ConnectAsync(ServerIP, Port)).ConfigureAwait(false);
+
+            return clam.GetStream();
         }
 
         /// <summary>
@@ -145,8 +172,9 @@
 
         /// <summary>
         /// Executes a PING command on the ClamAV server.
+        /// <para>Tip:when you call this method , please wrap your call in a try/catch ,because if return is not true,will throw a exception,or you can use <see cref="TryPingAsync"/></para>
         /// </summary>
-        /// <returns>If the server responds with PONG, returns true.  Otherwise returns false.</returns>
+        /// <returns>If the server responds with PONG, returns true.  Otherwise throw a exception.</returns>
         public Task<bool> PingAsync()
         {
             return PingAsync(CancellationToken.None);
@@ -154,14 +182,40 @@
 
         /// <summary>
         /// Executes a PING command on the ClamAV server.
+        /// <para>Tip:when you call this method , please wrap your call in a try/catch ,because if return is not true,will throw a exception,or you can use <see cref="TryPingAsync"/></para>
         /// </summary>
-        /// <returns>If the server responds with PONG, returns true.  Otherwise returns false.</returns>
+        /// <returns>If the server responds with PONG, returns true.  Otherwise throw a exception.</returns>
         public async Task<bool> PingAsync(CancellationToken cancellationToken)
         {
             var result = await ExecuteClamCommandAsync("PING", cancellationToken).ConfigureAwait(false);
             return result.ToLowerInvariant() == "pong";
         }
 
+        /// <summary>
+        /// Executes a PING command on the ClamAV server.
+        /// </summary>
+        /// <returns>If the server responds with PONG, returns true.  Otherwise returns false.</returns>
+        public Task<bool> TryPingAsync()
+        {
+            return TryPingAsync(CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Executes a PING command on the ClamAV server.
+        /// </summary>
+        /// <returns>If the server responds with PONG, returns true.  Otherwise returns false.</returns>
+        public async Task<bool> TryPingAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                var result = await ExecuteClamCommandAsync("PING", cancellationToken).ConfigureAwait(false);
+                return result.ToLowerInvariant() == "pong";
+            }
+            catch
+            {
+                return false;
+            }
+        }
         /// <summary>
         /// Scans a file/directory on the ClamAV Server.
         /// </summary>
@@ -267,5 +321,14 @@
                 return await SendAndScanFileAsync(stream, cancellationToken).ConfigureAwait(false);
             }
         }
-    }
+
+		/// <summary>
+		/// Shuts down the ClamAV server in an orderly fashion.
+		/// </summary>
+		public async Task Shutdown(CancellationToken cancellationToken)
+		{
+		    await ExecuteClamCommandAsync("SHUTDOWN", cancellationToken).ConfigureAwait(false);
+		}
+
+	}
 }
